@@ -1,0 +1,7 @@
+input, textarea{
+	display: block;
+}
+
+input[type=checkbox]{
+	float: left;
+}

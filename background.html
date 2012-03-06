@@ -1,0 +1,232 @@
+<html>
+
+<script>
+
+	//settin the options (if nessessary)
+	if(localStorage['distractingSites'] == undefined){
+		localStorage['distractingSites'] = "reddit.com;facebook.com;imgur.com;xkcd.com;woot.com;"
+										 + "gwscomic.com;girlswithslingshotcomic.com;licd.com;"
+										 + "explosm.net";
+	}
+	if(localStorage['distractedTime'] === undefined){
+		localStorage['distractedTime'] = 5 * 60 * 1000;
+	}
+	if(localStorage['blockTime'] === undefined){
+		localStorage['blockTime'] = 30 * 1000;
+	}
+	
+	//set global variables
+	//options
+	var distractingSites;
+	var stickOnBlock;
+	var blockTime;
+	var distractedTime;
+	updateOptions();
+	//other internal global variables
+	var state = "normal"; //valid values include: normal, blocked, and distracted
+	var blockTimer;
+	var distractedTimer;
+	var blockedTabs = new Array(); //all the tabs that are currently blocked
+	var lastBlockedTabId = 0;
+	var notifications = new Array();
+	
+	chrome.extension.onRequest.addListener(function(request, sender, sendResponse){
+		console.log("Incoming request!");
+		console.log(request);
+		if(request.msg == "optionsChanged"){
+			updateOptions();
+			sendResponse({msg: "optionsUpdated"});
+		} else if(request.msg == "gimmeBlockTime"){
+			sendResponse({msg: blockTime});
+		} else {
+			sendResponse({}); //snub them
+		}
+	});
+	
+	function updateOptions(){
+		distractingSites = localStorage['distractingSites'].split(';');
+		stickOnBlock = parseInt(localStorage['stickOnBlock']);
+		blockTime = parseInt(localStorage['blockTime']);
+		distractedTime = parseInt(localStorage['distractedTime']);
+	}
+
+	chrome.tabs.onUpdated.addListener(function(tabId, changeInfo, tab){
+		console.log("Change in tab!");
+		console.log(tab);
+		//check and see if we're changing a currently blocked tab
+		if(state == "blocked" && !isDistracting(tab.url) && isBlocked(tabId)) removeBlock(tabId);
+		//now check and see if we should block this tab
+		if (tab.status == "complete" && state != "distracted" 
+				&& isDistracting(tab.url) && !isBlocked(tabId)){
+			console.log("Calling block from onUpdate!");
+			block(tab.id);
+		}
+	});
+	
+	//when user switches to another tab, if that tab is distracting, block it if it's not already
+	chrome.tabs.onActiveChanged.addListener(function(tabId){
+		console.log("Changing tabs! New tab id: " + tabId);
+		chrome.tabs.get(tabId, function(tab){
+			console.log(state + ";" + !isBlocked(tab.id) + ";" + isDistracting(tab.url));
+			if(state != "distracted" && !isBlocked(tab.id) && isDistracting(tab.url)){
+				console.log("Calling block from onActiveChanged!");
+				block(tab.id);
+			}
+		});
+	});
+	
+	//if a tab is closed, unblock it if it was already blocked
+	chrome.tabs.onRemoved.addListener(function(tabId, removeInfo){
+		console.log("Tab is going away!");
+		if(isBlocked(tabId)){
+			removeBlock(tabId);
+		}
+	});
+	
+	//if the extension icon is pressed, and we're distracted, reset to normal and stop the timer
+	chrome.browserAction.onClicked.addListener(function(tab){
+		console.log("Extension button pressed!  State is " + state);
+		if(state == "distracted"){
+			clearTimeout(distractedTimer);
+			changeState("normal");
+		}
+	});
+	
+	
+	
+	//returns true if site passed is one of the distracting sites
+	function isDistracting(site){
+		site = site.toLowerCase();
+		console.log("Checking to see if " + site + " is distracting.");
+		for(i in distractingSites){
+			if(site.indexOf(distractingSites[i]) != -1){
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	//change state to blocked
+	//block page on current tab
+	//set block timer for this tab
+	function block(badTabId){
+		if(state == "distracted"){
+			console.warn("Illegal call to block.  We are alread distracted.");
+			return false;
+		} else if(isBlocked(badTabId)){
+			console.warn("Illegal call to block(): tab " + badTabId + " is already blocked.");
+			return false;
+		} else{
+			//everything has checked out
+			//put up the wall
+			var injection = new Object();
+			injection.file = "buildWall.js";
+			chrome.tabs.executeScript(badTabId, injection);
+			if(state == "blocked") clearTimeout(blockTimer); //reset the timer
+			blockTimer = setTimeout("distracted()", blockTime);
+			blockedTabs.push(badTabId); //add this guy to our list
+			changeState("blocked");
+		}
+	}
+	
+	//assumes that page was changed or closed
+	//turn off block timer
+	//if this was the last block timer, and we're not distracted, change state to normal
+	function removeBlock(tabId){
+		if(isBlocked(tabId)){ //we only need to do something if this is a blocked tab
+			var blockedTabPos = blockedTabs.indexOf(tabId);
+			blockedTabs.splice(blockedTabPos, 1); //take this now good tab out of the list
+			if(blockedTabs.length == 0){ //are there any more tabs blocked?
+				clearTimeout(blockTimer);
+				changeState("normal");
+			}
+		}
+	}
+	
+	//change state to distracted
+	//remove all of the blocks
+	function distracted(){
+		if(state != "blocked"){ //we only keep going if we are blocked
+			console.warn("Invalid call to distracted(), we are not currently blocked!");
+			return false;
+		}
+		//take down the wall
+		chrome.tabs.query({active: true}, function(currentTabObjArray){
+			var currentTabs = new Array();
+			for(i in currentTabObjArray) currentTabs.push(currentTabObjArray[i].id);
+			var cheated = true; //check and see if they left the blocked tabs
+			var injection = new Object();
+			injection.file = "tearDownThisWall.js";
+			console.log("We are getting ready to make sure that the user didn't cheat.");
+			console.log("Current tabs: ");
+			console.log(currentTabObjArray);
+			var removedTabs = new Array();
+			while(blockedTabs.length){
+				var blockedTab = blockedTabs.shift(); //pull off one tab
+				removedTabs.push(blockedTab);
+				chrome.tabs.executeScript(blockedTab, injection);
+				if(currentTabs.indexOf(blockedTab) >= 0) cheated = false;
+			}
+			console.log("The blocked tabs were:");
+			console.log(removedTabs);
+			//if they cheated, then they'll have to go through this whole process over again
+			if(cheated){
+				changeState("normal");
+				desktopNotification("blocked.png", "Cheater!", 
+					"You must wait on the blocked page for the whole waiting period in order to "
+					+ "view it.");
+			} else {
+				var distractedMinutes = distractedTime / 60000;
+				desktopNotification("distracted.png", "OK, go get'em", 
+					"You can now view this and other distracting sites for " + distractedMinutes 
+					+ " minutes.");
+				console.log("Distracted time: " + distractedTime);
+				distractedTimer = setTimeout("letsFocus()", distractedTime);
+				changeState("distracted");
+			}
+		});
+	}
+	
+	//changes state to normal
+	function letsFocus(){
+		changeState("normal");
+		desktopNotification("normal.png", "Back to Work!", 
+			"OK, you've been distracted long enough... get back to work.");
+	}
+	
+	//changes the internal state and the icon
+	function changeState(newState){
+		state = state.toLowerCase();
+		if(newState == "normal" || newState == "blocked" || newState == "distracted"){
+			console.log("Change state to " + newState);
+			state = newState;
+			var icon = new Object();
+			icon.path = newState + ".png";
+			chrome.browserAction.setIcon(icon);
+		} else {
+			console.warn("State passes to changeState() was not a valid new state.");
+		}
+	}
+	
+	//test to see if tab is block
+	function isBlocked(tabId){
+		return (blockedTabs.indexOf(tabId) != -1);
+	}
+	
+	function desktopNotification(img, title, msg){
+		var notification = webkitNotifications.createNotification(img,title,msg);
+		notification.show();
+		notifications.push(notification);
+		setTimeout("closeNotification()", 10000);
+	}
+	
+	function closeNotification(){
+		var notification = notifications.pop();
+		notification.cancel();
+	}
+	
+	
+
+</script>
+
+</html>

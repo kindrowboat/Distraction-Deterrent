@@ -1,0 +1,83 @@
+<html>
+<head>
+	<title>Distraction Deterent Options</title>
+	<link rel="stylesheet" href="options.css"/>
+
+</head>
+<script type="text/javascript">
+
+	//globals
+	//objects of the DOM
+	var distractingSitesTa;
+	var blockTimeTb;
+	var distractedTimeTb;
+
+//gets everything ready for its first run	
+function bootStraps(){
+	//set the global objects to their appropriate element in the DOM
+	distractingSitesTa = document.getElementById("distractingSitesTa");
+	blockTimeTb = document.getElementById("blockTimeTb");
+	distractedTimeTb = document.getElementById("distractedTimeTb");
+	//load the values
+	loadOptions();
+}
+
+// Saves options to localStorage.
+function saveOptions() {
+	
+	//get the value of the text area
+	var distractingSitesList = distractingSitesTa.value;
+	//split it up by new lines, then patch it back together by semicolons
+	var distractingSites = distractingSitesList.toLowerCase().split(/\r\n|\r|\n/g).sort();
+	console.log(distractingSites);
+	while(distractingSites[0] == "") distractingSites.shift(); //get rid of empty lines
+	distractingSites = distractingSites.join(';');
+	//get the values for the timers
+	var blockTime = parseInt(blockTimeTb.value) * 1000;
+	var distractedTime = parseInt(distractedTimeTb.value) * 60000;
+	//save stuff to local storage
+	localStorage['distractingSites'] = distractingSites;
+	localStorage['blockTime'] = blockTime;
+	localStorage['distractedTime'] = distractedTime;
+	//tell the background script, that the options have been changed
+	chrome.extension.sendRequest({msg: "optionsChanged"}, function(response){
+		console.log(response);
+	});
+	//Update status to let user know options were saved.
+	var status = document.getElementById("status");
+	status.innerHTML = "Options Saved.";
+	setTimeout(function() {
+		status.innerHTML = "";
+	}, 750);
+	//load the options
+	loadOptions();
+}
+
+// Restores select box state to saved value from localStorage.
+function loadOptions() {
+	//get the info we need from localStorage
+	var distractingSitesList = localStorage["distractingSites"].split(';').join("\n");
+	var blockTime = parseInt(localStorage['blockTime'])/1000;
+	var distractedTime = parseInt(localStorage['distractedTime'])/60000;
+	//set the values of the form
+	distractingSitesTa.value = distractingSitesList;
+	blockTimeTb.value = blockTime;
+	distractedTimeTb.value = distractedTime;
+}
+
+</script>
+
+<body onload="bootStraps()">
+<p id="status"></p>
+<form action="">
+	<label for="distractingSitesTa">Distracting Sites (one per line)</label>
+	<textarea name="" id="distractingSitesTa" cols="30" rows="10"></textarea>
+	<label for="blockTimeTb">Block time (seconds)</label>
+	<input type="text" id="blockTimeTb"/>
+	<label for="distractedTimeTb">Allowed distraction time (minutes)</label>
+	<input type="text" id="distractedTimeTb"/>
+	<input type="button" value="Update" onclick="saveOptions()" id="updateButton"/>
+</form>
+
+</body>
+</html>
